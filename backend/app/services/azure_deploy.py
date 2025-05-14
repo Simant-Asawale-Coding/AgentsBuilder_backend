@@ -7,7 +7,7 @@ load_dotenv()
 
 GITHUB_API = "https://api.github.com"
 
-def trigger_github_workflow(repo, workflow_file, ref, inputs, user_id, github_token_env="GITHUB_TOKEN"):
+def trigger_github_workflow(repo, workflow_file, ref, inputs, github_token_env="GITHUB_TOKEN"):
     token = os.environ.get(github_token_env)
     if not token:
         raise RuntimeError(f"GitHub token not found in environment variable: {github_token_env}")
@@ -105,11 +105,11 @@ if __name__ == "__main__":
     repo = os.getenv("GITHUB_REPO")
     workflow_file = "deploy-agent.yml"
     ref = os.getenv("GITHUB_REF")
-    agent_file = f"agents/{user_id}/pydantic_ai/pydantic-ai-8bdc0c9f-9b05.py"
-    sha = "e5e2fda3570cb2a62474f8b5b5d85cb51d3a51c4"
+    agent_file = f"agents/pydantic_ai/pydantic-ai-8bdc0c9f-9b05.py"
+    sha = "c4366c71fb0ac0e500e09b73dc3c210bf3a1980a"
     inputs = {
-    "sha": "e5e2fda3570cb2a62474f8b5b5d85cb51d3a51c4",
-    "agent_file": "agents/{user_id}/pydantic_ai/pydantic-ai-8bdc0c9f-9b05.py",
+    "sha": "c4366c71fb0ac0e500e09b73dc3c210bf3a1980a",
+    "agent_file": "agents/pydantic_ai/pydantic-ai-8bdc0c9f-9b05.py",
     "framework": "pydantic_ai"
 }
     run_id = trigger_github_workflow(repo, workflow_file, ref, inputs)

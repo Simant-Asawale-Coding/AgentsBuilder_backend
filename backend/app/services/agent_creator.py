@@ -32,6 +32,13 @@ def save_agent_code(agent_id: str, code: str) -> str:
         f.write(code)
     return file_path
 
+def get_agent_id(agent_info: dict) -> str:
+    agent_id = str(uuid.uuid4())
+    agent_info['id'] = agent_id
+    framework_id = agent_info['framework'].replace('_', '-')
+    final_agent_id = framework_id + "-" + agent_id
+    return final_agent_id[:25]
+
 if __name__ == "__main__":
     # Simulate rendering and saving agent code for agno
     import uuid
