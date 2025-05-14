@@ -1,0 +1,8 @@
+openai-agents
+azure-ai-inference 
+aiohttp
+mcp
+fastapi
+uvicorn
+jsonschema
+openai

@@ -1,0 +1,10 @@
+langgraph
+langchain-mcp-adapters
+langchain-openai
+azure-ai-inference 
+aiohttp
+mcp
+fastapi
+uvicorn
+jsonschema
+openai

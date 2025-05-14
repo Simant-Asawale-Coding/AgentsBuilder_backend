@@ -1,0 +1,51 @@
+import os
+from dotenv import load_dotenv
+import asyncio
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.azure import AzureProvider
+from pydantic_ai.mcp import MCPServerHTTP
+import uvicorn
+
+load_dotenv()
+
+app = FastAPI()
+
+class ChatRequest(BaseModel):
+    input: str
+
+def get_azure_llm():
+    return OpenAIModel(
+        "{{ llm_model }}",
+        provider=AzureProvider(
+            azure_endpoint="{{ llm_endpoint }}",
+            api_version="{{ llm_api_version }}",
+            api_key="{{ llm_api_key }}",
+        ),
+    )
+
+@app.on_event("startup")
+async def startup_event():
+    global agent, mcp_servers
+    llm = get_azure_llm()
+    mcp_servers = []
+    {% for mcp in mcp_servers %}
+    {{ mcp.name }} = MCPServerHTTP(url="{{ mcp.url }}")
+    await {{ mcp.name }}.__aenter__()
+    mcp_servers.append({{ mcp.name }})
+    {% endfor %}
+    system_prompt = "{{ system_message }}"
+    agent = Agent(llm, mcp_servers=mcp_servers, system_prompt=system_prompt)
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    try:
+        result = await agent.run(request.input)
+        return {"output": result.output}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=80)

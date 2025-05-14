@@ -1,0 +1,9 @@
+{
+  "OPENAI_API_KEY": "string",
+  "OPENAI_API_BASE": "string",
+  "OPENAI_API_VERSION": "string",
+  "OPENAI_DEPLOYMENT_NAME": "string",
+  "MCP_SERVERS": [
+    {"name": "string", "url": "string", "transport": "http"}
+  ]
+}

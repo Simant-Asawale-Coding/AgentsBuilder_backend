@@ -1,0 +1,66 @@
+import os
+from dotenv import load_dotenv
+import asyncio
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from agents import Agent, Runner, set_default_openai_client, set_tracing_disabled
+from openai import AsyncAzureOpenAI
+from agents.models import openai_chatcompletions
+from agents.mcp import MCPServerSse
+import uvicorn
+
+load_dotenv()
+
+app = FastAPI()
+
+class ChatRequest(BaseModel):
+    input: str
+
+@app.on_event("startup")
+async def startup_event():
+    global agent, mcp_servers
+    openai_client = AsyncAzureOpenAI(
+        api_key="{{ llm_api_key }}",
+        api_version="{{ llm_api_version }}",
+        azure_endpoint="{{ llm_endpoint }}",
+        azure_deployment="{{ llm_model }}"
+    )
+    set_default_openai_client(openai_client)
+    set_tracing_disabled(True)
+    mcp_servers = []
+    {% for mcp in mcp_servers %}
+    {{ mcp.name }} = MCPServerSse(
+        params={"url": "{{ mcp.url }}"},
+        cache_tools_list=True
+    )
+    await {{ mcp.name }}.connect()
+    mcp_servers.append({{ mcp.name }})
+    {% endfor %}
+    system_message = "{{ system_message }}"
+    agent = Agent(
+        name="{{ agent_name }}",
+        instructions=system_message,
+        model=openai_chatcompletions.OpenAIChatCompletionsModel(
+            model="{{ llm_model }}",
+            openai_client=openai_client,
+        ),
+        mcp_servers=mcp_servers,
+    )
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    try:
+        result = await Runner.run(
+            starting_agent=agent,
+            input=request.input
+        )
+        return {"output": result.final_output}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=80)
+    except (RuntimeError, asyncio.CancelledError) as e:
+        if "Attempted to exit cancel scope" in str(e) or isinstance(e, asyncio.CancelledError):
+            pass

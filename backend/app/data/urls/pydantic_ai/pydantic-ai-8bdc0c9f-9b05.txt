@@ -1,0 +1,1 @@
+https://pydantic-ai-8bdc0c9f-9b05.politeisland-62690a32.eastus.azurecontainerapps.io

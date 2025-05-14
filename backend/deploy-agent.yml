@@ -1,0 +1,144 @@
+# name: Deploy Agent to Azure Container Apps
+
+# on:
+#   push:
+#     paths:
+#       - 'agents/**'
+#   workflow_dispatch:
+
+# jobs:
+#   build-and-deploy:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v3
+
+#       - name: Set up Python
+#         uses: actions/setup-python@v4
+#         with:
+#           python-version: '3.10'
+
+#       - name: Azure Login
+#         uses: azure/login@v1
+#         with:
+#           creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+#       - name: Find latest agent file in repo
+#         id: detect
+#         run: |
+#           AGENT_FILE=$(git log -1 --pretty=format: --name-only --diff-filter=AM -- agents/*.py | head -n 1)
+#           echo "AGENT_FILE=$AGENT_FILE" >> $GITHUB_ENV
+#           AGENT_DIR=$(dirname "$AGENT_FILE")
+#           echo "AGENT_DIR=$AGENT_DIR" >> $GITHUB_ENV
+#           AGENT_NAME=$(basename "$AGENT_FILE" .py)
+#           echo "AGENT_NAME=$AGENT_NAME" >> $GITHUB_ENV
+#           echo "Detected agent file: $AGENT_FILE in $AGENT_DIR"
+#       - name: Build and Push Docker image
+#         run: |
+#           cd $AGENT_DIR
+#           echo -e "FROM python:3.10-slim\nCOPY . /app\nWORKDIR /app\nRUN pip install -r requirements.txt\nCMD [\"python\", \"$(basename $AGENT_FILE)\"]" > Dockerfile
+#           docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}/$AGENT_NAME:${{ github.sha }} -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}/$AGENT_NAME:latest .
+#           echo ${{ secrets.AZURE_ACR_PASSWORD }} | docker login ${{ secrets.AZURE_CONTAINER_REGISTRY }} -u ${{ secrets.AZURE_ACR_USERNAME }} --password-stdin
+#           docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}/$AGENT_NAME:${{ github.sha }}
+#           docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}/$AGENT_NAME:latest
+#       - name: Create or Update Azure Container App
+#         run: |
+#           set -e
+#           EXISTING_APP=$(az containerapp show --name $AGENT_NAME --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} --query name -o tsv || echo "")
+#           if [ -z "$EXISTING_APP" ]; then
+#             az containerapp create \
+#               --name $AGENT_NAME \
+#               --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+#               --image ${{ secrets.AZURE_CONTAINER_REGISTRY }}/$AGENT_NAME:${{ github.sha }} \
+#               --environment ${{ secrets.AZURE_CONTAINERAPPS_ENVIRONMENT }} \
+#               --ingress external --target-port 80 \
+#               --registry-server ${{ secrets.AZURE_CONTAINER_REGISTRY }} \
+#               --registry-username ${{ secrets.AZURE_ACR_USERNAME }} \
+#               --registry-password ${{ secrets.AZURE_ACR_PASSWORD }}
+#           else
+#             az containerapp update \
+#               --name $AGENT_NAME \
+#               --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+#               --image ${{ secrets.AZURE_CONTAINER_REGISTRY }}/$AGENT_NAME:${{ github.sha }}
+#           fi
+#           APP_URL=$(az containerapp show --name $AGENT_NAME --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} --query properties.configuration.ingress.fqdn -o tsv)
+#           echo "DEPLOYED_URL=https://$APP_URL"
+
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA to deploy"
+        required: true
+      agent_file:
+        description: "Agent file to deploy (e.g. agents/agno/agno1.py)"
+        required: true
+      framework:
+        description: "Framework name (e.g. agno)"
+        required: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code at requested SHA
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.inputs.sha }}
+
+      - name: Set agent vars
+        run: |
+          echo "AGENT_FILE=${{ github.event.inputs.agent_file }}" >> $GITHUB_ENV
+          echo "FRAMEWORK=${{ github.event.inputs.framework }}" >> $GITHUB_ENV
+          AGENT_NAME=$(basename "${{ github.event.inputs.agent_file }}" .py)
+          echo "AGENT_NAME=$AGENT_NAME" >> $GITHUB_ENV
+          
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Prepare Docker build context
+        run: |
+          mkdir build_ctx
+          cp $AGENT_FILE build_ctx/
+          cp requirements/$FRAMEWORK/requirements.txt build_ctx/
+          cd build_ctx
+          echo -e "FROM python:3.10-slim\nCOPY . /app\nWORKDIR /app\nRUN pip install -r requirements.txt\nCMD [\"python\", \"$(basename $AGENT_FILE)\"]" > Dockerfile
+
+      - name: Build and Push Docker image
+        run: |
+          cd build_ctx
+          docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}/$AGENT_NAME:${{ github.event.inputs.sha }} -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}/$AGENT_NAME:latest .
+          echo ${{ secrets.AZURE_ACR_PASSWORD }} | docker login ${{ secrets.AZURE_CONTAINER_REGISTRY }} -u ${{ secrets.AZURE_ACR_USERNAME }} --password-stdin
+          docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}/$AGENT_NAME:${{ github.event.inputs.sha }}
+          docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}/$AGENT_NAME:latest
+
+    
+
+      - name: Create or Update Azure Container App
+        run: |
+          set -e
+          EXISTING_APP=$(az containerapp show --name $AGENT_NAME --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} --query name -o tsv || echo "")
+          if [ -z "$EXISTING_APP" ]; then
+            az containerapp create \
+              --name $AGENT_NAME \
+              --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+              --image ${{ secrets.AZURE_CONTAINER_REGISTRY }}/$AGENT_NAME:${{ github.event.inputs.sha }} \
+              --environment ${{ secrets.AZURE_CONTAINERAPPS_ENVIRONMENT }} \
+              --ingress external --target-port 8005 \
+              --registry-server ${{ secrets.AZURE_CONTAINER_REGISTRY }} \
+              --registry-username ${{ secrets.AZURE_ACR_USERNAME }} \
+              --registry-password ${{ secrets.AZURE_ACR_PASSWORD }}
+          else
+            az containerapp update \
+              --name $AGENT_NAME \
+              --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+              --image ${{ secrets.AZURE_CONTAINER_REGISTRY }}/$AGENT_NAME:${{ github.event.inputs.sha }}
+          fi
+          APP_URL=$(az containerapp show --name $AGENT_NAME --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} --query properties.configuration.ingress.fqdn -o tsv)
+          echo "DEPLOYED_URL=https://$APP_URL"
+
+
+

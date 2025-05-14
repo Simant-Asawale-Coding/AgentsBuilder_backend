@@ -1,0 +1,9 @@
+{
+  "AZURE_OPENAI_API_KEY": "string",
+  "AZURE_OPENAI_API_VERSION": "string",
+  "AZURE_OPENAI_ENDPOINT": "string",
+  "AZURE_OPENAI_DEPLOYMENT": "string",
+  "MCP_SERVERS": [
+    {"name": "string", "url": "string", "transport": "sse"}
+  ]
+}

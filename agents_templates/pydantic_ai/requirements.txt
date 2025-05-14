@@ -1,0 +1,8 @@
+pydantic_ai
+azure-ai-inference 
+aiohttp
+mcp
+fastapi
+uvicorn
+jsonschema
+openai

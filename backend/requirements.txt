@@ -1,0 +1,21 @@
+# Core backend dependencies
+fastapi
+uvicorn
+python-dotenv
+jinja2
+pydantic
+jsonschema
+# Agent framework dependencies (union of all frameworks)
+openai-agents
+pydantic_ai
+langgraph
+langchain-mcp-adapters
+langchain-openai
+agno
+azure-ai-inference
+aiohttp
+azure-identity
+azure-mgmt-appcontainers
+pydantic-settings
+azure-appconfiguration
+azure-storage-blob
