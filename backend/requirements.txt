@@ -19,3 +19,8 @@ azure-mgmt-appcontainers
 pydantic-settings
 azure-appconfiguration
 azure-storage-blob
+pyodbc
+azure-search-documents
+requests
+langchain 
+langchain-community 

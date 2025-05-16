@@ -3,10 +3,7 @@ from azure.appconfiguration import AzureAppConfigurationClient
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
-# Load environment variables from .env (for local development)
-dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
-load_dotenv(dotenv_path=dotenv_path)
-
+load_dotenv()
 # Get Azure App Configuration connection string
 connection_string = os.getenv("APPCONFIGURATION_CONNECTIONSTRING")
 
@@ -14,7 +11,8 @@ if not connection_string:
     raise ValueError("APPCONFIGURATION_CONNECTIONSTRING is missing! Set it in environment variables.")
 
 # Initialize Azure App Configuration client
-client = AzureAppConfigurationClient.from_connection_string(connection_string)
+client = AzureAppConfigurationClient.from_connection_string("Endpoint=https://agents-builder-app-config.azconfig.io;Id=HTIL;Secret=CqSfSRB6toHJYmWozz0XAet8tqSFUyLPw66osOnxdQ5be9YDtiE6JQQJ99BEACYeBjFdkwbiAAACAZAC337W")
+print("Endpoint=https://agents-builder-app-config.azconfig.io;Id=HTIL;Secret=CqSfSRB6toHJYmWozz0XAet8tqSFUyLPw66osOnxdQ5be9YDtiE6JQQJ99BEACYeBjFdkwbiAAACAZAC337W")
 
 def get_config_value(key, label=None):
     """Fetch configuration values from Azure App Configuration. Handles key formatting and labels."""
@@ -28,24 +26,25 @@ def get_config_value(key, label=None):
         raise ValueError(f"Error retrieving key '{azure_key}' with label '{label}': {str(e)}")
 
 class AppSettings(BaseSettings):
-    """Application settings for configuring Azure OpenAI, HuggingFace embeddings, LlamaParse, and Azure Blob Storage."""
+    """Application settings for AgentsBuilder"""
 
     # AgentsBuilder MSSQL settings
-    agentsbuilder_mssqlserver: str = get_config_value("agentsbuilder:mssqlserver", label="agentsbuilder")
-    agentsbuilder_mssqldatabase: str = get_config_value("agentsbuilder:mssqldatabase", label="agentsbuilder")
-    agentsbuilder_mssqlport: int = get_config_value("agentsbuilder:mssqlport", label="agentsbuilder")
-    agentsbuilder_mssqluser: str = get_config_value("agentsbuilder:mssqluser", label="agentsbuilder")
-    agentsbuilder_mssqlpassword: str = get_config_value("agentsbuilder:mssqlpassword", label="agentsbuilder")
-    agentsbuilder_mssqldriver: str = get_config_value("agentsbuilder:mssqldriver", label="agentsbuilder")
-    agentsbuilder_user_table_name: str = get_config_value("agentsbuilder:usertablename", label="agentsbuilder")
-    agentsbuilder_user_agents_table_name: str = get_config_value("agentsbuilder:useragentstablename", label="agentsbuilder")
-    agents_builder_agents_table_name: str = get_config_value("agentsbuilder:agentstablename", label="agentsbuilder")
+    agentsbuilder_mssqlconnectionstring: str = get_config_value("agentsbuilder:dbconnectionstring", label="mssql")
+    
+
+    #AgentsBuilder MSSQL Tables
+    agentsbuilder_user_table_name: str = get_config_value("agentsbuilder:userstable", label="database")
+    agentsbuilder_user_agents_table_name: str = get_config_value("agentsbuilder:useragentstable", label="database")
+    agentsbuilder_user_tools_table_name: str = get_config_value("agentsbuilder:usertoolstable", label="database")
+    agentsbuilder_agents_table_name: str = get_config_value("agentsbuilder:agentstable", label="database")
+    agentsbuilder_marketplace_tools_table_name: str = get_config_value("agentsbuilder:marketplacetoolstable", label="database")
+    agentsbuilder_custom_tools_table_name: str = get_config_value("agentsbuilder:customtoolstable", label="database")
 
     #AgentsBuilder Github settings
-    GITHUB_TOKEN: str = get_config_value("agentsbuilder:githubtoken", label="agentsbuilder")
-    GITHUB_REPO: str = get_config_value("agentsbuilder:repo", label="agentsbuilder")
-    GITHUB_REF: str = get_config_value("agentsbuilder:ref", label="agentsbuilder")
-    GITHUB_REPO_URL: str = get_config_value("agentsbuilder:repourl", label="agentsbuilder")
+    GITHUB_TOKEN: str = get_config_value("agentsbuilder:githubtoken", label="github")
+    GITHUB_REPO: str = get_config_value("agentsbuilder:repo", label="github")
+    GITHUB_REF: str = get_config_value("agentsbuilder:ref", label="github")
+    GITHUB_REPO_URL: str = get_config_value("agentsbuilder:repourl", label="github")
 
 
     

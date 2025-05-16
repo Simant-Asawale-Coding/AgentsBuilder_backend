@@ -8,24 +8,19 @@ import uuid
 class AuthService:
     def __init__(self):
         settings = AppSettings()
-        self.server = settings.agentsbuilder_mssqlserver
-        self.database = settings.agentsbuilder_mssqldatabase
-        self.port = settings.agentsbuilder_mssqlport
-        self.username = settings.agentsbuilder_mssqluser
-        self.password = settings.agentsbuilder_mssqlpassword
-        self.driver = settings.agentsbuilder_mssqldriver
-        self.user_table = getattr(settings, 'agentsbuilder_user_table_name', 'agents_builder_users')
+        self.user_table = settings.agentsbuilder_user_table_name
+        self.connection_string = settings.agentsbuilder_mssqlconnectionstring
 
     def get_connection(self):
-        conn_str = (
-            f"DRIVER={self.driver};"
-            f"SERVER={self.server},{self.port};"
-            f"DATABASE={self.database};"
-            f"UID={self.username};"
-            f"PWD={self.password}"
-        )
-        print(conn_str)
-        return pyodbc.connect(conn_str)
+        # conn_str = (
+        #     f"DRIVER={self.driver};"
+        #     f"SERVER={self.server},{self.port};"
+        #     f"DATABASE={self.database};"
+        #     f"UID={self.username};"
+        #     f"PWD={self.password}"
+        # )
+        print(self.connection_string)
+        return pyodbc.connect(self.connection_string)
 
     def sign_up(self, username: str, password_plain: str):
         """
