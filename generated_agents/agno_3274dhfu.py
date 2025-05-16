@@ -1,13 +1,12 @@
 import os
 from dotenv import load_dotenv
-import asyncio
+from agno.agent import Agent
+from agno.models.azure import AzureOpenAI
+from agno.tools.mcp import MCPTools
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIModel
-from pydantic_ai.providers.azure import AzureProvider
-from pydantic_ai.mcp import MCPServerHTTP
 import uvicorn
+import asyncio
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -18,16 +17,6 @@ app = FastAPI()
 
 class ChatRequest(BaseModel):
     input: str
-
-def get_azure_llm():
-    return OpenAIModel(
-        "gpt4o",
-        provider=AzureProvider(
-            azure_endpoint="https://aressgenaisvc.openai.azure.com/",
-            api_version="2024-02-15-preview",
-            api_key="09d5dfbba3474a18b2f65f8f9ca19bab",
-        ),
-    )
 
 # --- MCP Tool Config ---
 ALL_TOOLS = [
@@ -42,7 +31,7 @@ mcp_tool_instances = {tool["id"]: None for tool in MCP_TOOL_CONFIGS}
 
 async def check_tool_health(tool_id, url):
     old_tool = mcp_tool_instances.get(tool_id)
-    tool = MCPServerHTTP(url=url)
+    tool = MCPTools(url=url, transport="sse")
     try:
         await tool.__aenter__()
         mcp_tool_status[tool_id] = True
@@ -70,16 +59,16 @@ async def background_health_checker():
             await asyncio.gather(*tasks)
         except Exception as loop_err:
             logging.error(f"Health checker loop error: {loop_err}")
-        await asyncio.sleep(30)  # Check every 30 seconds
+        await asyncio.sleep(30)
 
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(background_health_checker())
     await asyncio.sleep(1)  # Give checker a moment to run on startup
 
-# Helper to build dynamic system prompt
+# Helper to build dynamic system message
 
-def build_system_prompt(available_tool_ids):
+def build_system_message(available_tool_ids):
     all_tool_list = ', '.join([f"{tool['id']} ({tool['desc']})" for tool in ALL_TOOLS])
     available_list = ', '.join([tool['id'] for tool in ALL_TOOLS if tool['id'] in available_tool_ids])
     return (
@@ -93,21 +82,32 @@ async def get_current_agent():
     llm = get_azure_llm()
     available_tools = [mcp_tool_instances[tool['id']] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['id']] and mcp_tool_instances[tool['id']] is not None]
     available_tool_ids = [tool['id'] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['id']] and mcp_tool_instances[tool['id']] is not None]
-    system_prompt = build_system_prompt(available_tool_ids)
-    return Agent(llm, mcp_servers=available_tools, system_prompt=system_prompt)
+    system_message = build_system_message(available_tool_ids)
+    return Agent(model=llm, tools=available_tools, system_message=system_message)
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    available_tools = [mcp_tool_instances[tool["id"]] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool["id"]] and mcp_tool_instances[tool["id"]] is not None]
+    available_tools = [mcp_tool_instances[tool['id']] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['id']] and mcp_tool_instances[tool['id']] is not None]
     if not available_tools:
         return {"output": "MCP Agent not available at the moment, it may be under maintenance. Please retry after some time."}
     try:
         agent = await get_current_agent()
-        result = await agent.run_stream(request.input)
-        return {"output": result.output}
+        result = await agent.arun(request.input)
+        output = result.content
+        return {"output": output}
     except Exception as e:
         logging.error(f"Error during agent run: {e}")
         return {"output": "MCP Agent not available at the moment, it may be under maintenance. Please retry after some time."}
+
+
+def get_azure_llm():
+    return AzureOpenAI(
+        id="gpt-4o",
+        api_key="09d5dfbba3474a18b2f65f8f9ca19bab",
+        azure_endpoint="https://aressgenaisvc.openai.azure.com/",
+        api_version="2024-10-21",
+        azure_deployment="gpt4o"
+    )
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=80)
