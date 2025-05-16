@@ -7,7 +7,6 @@ class MCPServerConfig(BaseModel):
     transport: str
 
 class AgentCreateRequest(BaseModel):
-    user_id: str
     tools: List[MCPServerConfig]
     prompt: str
     framework: str

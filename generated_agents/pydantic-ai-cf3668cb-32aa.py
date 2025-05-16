@@ -8,15 +8,14 @@ from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.azure import AzureProvider
 from pydantic_ai.mcp import MCPServerHTTP
 import uvicorn
-import logging
-
-logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
 
 app = FastAPI()
 
 from typing import List, Optional
+import logging
+logging.basicConfig(level=logging.INFO)
 
 class ChatRequest(BaseModel):
     input: str
@@ -34,12 +33,14 @@ def get_azure_llm():
 
 # --- MCP Tool Config ---
 ALL_TOOLS = [
-    {"id": "tavily", "desc": "Tavily Search Tool", "url": "https://tavily34-10d85be072--abr4bs5.wonderfulhill-64c3fbea.eastus.azurecontainerapps.io/sse"},
-    {"id": "mcpserver2", "desc": "MCPServer2 Data Tool", "url": "http://mcpserver2.eastus.azurecontainer.io:8000/sse"},
+    
+    {"id": "Tavily", "desc": "Tavily", "url": "https://tavily34-10d85be072.wonderfulhill-64c3fbea.eastus.azurecontainerapps.io/sse"},
+    
+    {"id": "SOQL", "desc": "SOQL", "url": "http://mcpserver2.eastus.azurecontainer.io:8000/sse"},
+    
 ]
 MCP_TOOL_CONFIGS = ALL_TOOLS
 
-# Track tool health and instances
 mcp_tool_status = {tool["id"]: False for tool in MCP_TOOL_CONFIGS}
 mcp_tool_instances = {tool["id"]: None for tool in MCP_TOOL_CONFIGS}
 
@@ -73,14 +74,12 @@ async def background_health_checker():
             await asyncio.gather(*tasks)
         except Exception as loop_err:
             logging.error(f"Health checker loop error: {loop_err}")
-        await asyncio.sleep(30)  # Check every 30 seconds
+        await asyncio.sleep(30)
 
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(background_health_checker())
     await asyncio.sleep(1)  # Give checker a moment to run on startup
-
-# Helper to build dynamic system prompt
 
 def build_system_prompt(available_tool_ids):
     all_tool_list = ', '.join([f"{tool['id']} ({tool['desc']})" for tool in ALL_TOOLS])
@@ -91,7 +90,6 @@ def build_system_prompt(available_tool_ids):
         "If the user asks for a tool that is not available, inform them that the tool is down and might be under maintenance and list the available tools."
     )
 
-# Dynamically create the Agent with available tools
 async def get_current_agent():
     llm = get_azure_llm()
     available_tools = [mcp_tool_instances[tool['id']] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['id']] and mcp_tool_instances[tool['id']] is not None]

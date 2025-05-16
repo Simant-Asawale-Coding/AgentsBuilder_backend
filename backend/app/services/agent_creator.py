@@ -2,6 +2,7 @@ import os
 import jinja2
 import tempfile
 from typing import Dict, Any
+import uuid
 
 # Map framework name to template path
 TEMPLATE_PATHS = {

@@ -8,7 +8,6 @@ from pydantic import BaseModel
 import uvicorn
 import asyncio
 import logging
-
 logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
@@ -22,15 +21,12 @@ class ChatRequest(BaseModel):
     chat_history: Optional[List[str]] = None  # List of previous messages (user/assistant turns)
 
 # --- MCP Tool Config ---
-ALL_TOOLS = [
-    {"id": "tavily", "desc": "Tavily Search Tool", "url": "https://tavily34-10d85be072--abr4bs5.wonderfulhill-64c3fbea.eastus.azurecontainerapps.io/sse"},
-    {"id": "mcpserver2", "desc": "MCPServer2 Data Tool", "url": "http://mcpserver2.eastus.azurecontainer.io:8000/sse"},
-]
+ALL_TOOLS = [{"name": "Tavily", "transport": "sse", "url": "https://tavily34-10d85be072--abr4bs5.wonderfulhill-64c3fbea.eastus.azurecontainerapps.io/sse"}, {"name": "SOQL", "transport": "sse", "url": "http://mcpserver2.eastus.azurecontainer.io:8000/sse"}]
 MCP_TOOL_CONFIGS = ALL_TOOLS
 
 # Track tool health and instances
-mcp_tool_status = {tool["id"]: False for tool in MCP_TOOL_CONFIGS}
-mcp_tool_instances = {tool["id"]: None for tool in MCP_TOOL_CONFIGS}
+mcp_tool_status = {tool["name"]: False for tool in MCP_TOOL_CONFIGS}
+mcp_tool_instances = {tool["name"]: None for tool in MCP_TOOL_CONFIGS}
 
 async def check_tool_health(tool_id, url):
     old_tool = mcp_tool_instances.get(tool_id)
@@ -58,7 +54,7 @@ async def check_tool_health(tool_id, url):
 async def background_health_checker():
     while True:
         try:
-            tasks = [check_tool_health(tool["id"], tool["url"]) for tool in MCP_TOOL_CONFIGS]
+            tasks = [check_tool_health(tool["name"], tool["url"]) for tool in MCP_TOOL_CONFIGS]
             await asyncio.gather(*tasks)
         except Exception as loop_err:
             logging.error(f"Health checker loop error: {loop_err}")
@@ -68,25 +64,13 @@ async def background_health_checker():
 async def startup_event():
     asyncio.create_task(background_health_checker())
     await asyncio.sleep(1)  # Give checker a moment to run on startup
-
-# Helper to build dynamic system message
-
-def build_system_message(available_tool_ids):
-    all_tool_list = ', '.join([f"{tool['id']} ({tool['desc']})" for tool in ALL_TOOLS])
-    available_list = ', '.join([tool['id'] for tool in ALL_TOOLS if tool['id'] in available_tool_ids])
-    return (
-        f"You are a helpful AI agent. You have access to the following tools: {all_tool_list}.\n"
-        f"Currently, the following tools are available: {available_list}.\n"
-        "If the user asks for a tool that is not available, inform them that the tool is under maintenance and list the available tools."
-    )
-
-# Dynamically create the Agent with available tools
-async def get_current_agent():
+    global agent
     llm = get_azure_llm()
-    available_tools = [mcp_tool_instances[tool['id']] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['id']] and mcp_tool_instances[tool['id']] is not None]
-    available_tool_ids = [tool['id'] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['id']] and mcp_tool_instances[tool['id']] is not None]
-    system_message = build_system_message(available_tool_ids)
-    return Agent(model=llm, tools=available_tools, system_message=system_message)
+    available_tools = [mcp_tool_instances[tool['name']] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['name']] and mcp_tool_instances[tool['name']] is not None]
+    available_tool_names = [tool['name'] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['name']] and mcp_tool_instances[tool['name']] is not None]
+    user_system_message = "You are a helpful AI agent."
+    system_message = build_system_message(available_tool_names, user_system_message)
+    agent = Agent(model=llm, tools=available_tools, system_message=system_message)
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
@@ -104,7 +88,13 @@ async def chat(request: ChatRequest):
     conversation.append(f"User: {request.input.strip()}")
     final_query = "Conversation so far:\n" + "\n".join(conversation)
     try:
-        agent = await get_current_agent()
+        global agent
+        # Always re-instantiate agent with up-to-date tools and system message
+        available_tools = [mcp_tool_instances[tool['name']] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['name']] and mcp_tool_instances[tool['name']] is not None]
+        available_tool_names = [tool['name'] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['name']] and mcp_tool_instances[tool['name']] is not None]
+        user_system_message = "You are a helpful AI agent."
+        system_message = build_system_message(available_tool_names, user_system_message)
+        agent = Agent(model=get_azure_llm(), tools=available_tools, system_message=system_message)
         result = await agent.arun(final_query)
         output = result.content
         return {"output": output}
@@ -112,14 +102,26 @@ async def chat(request: ChatRequest):
         logging.error(f"Error during agent run: {e}")
         return {"output": "An error occurred while fetching the response. Please try again later and make sure the prompt follows safety guidelines."}
 
-
 def get_azure_llm():
     return AzureOpenAI(
-        id="gpt-4o",
+        id="gpt4o",
         api_key="09d5dfbba3474a18b2f65f8f9ca19bab",
         azure_endpoint="https://aressgenaisvc.openai.azure.com/",
-        api_version="2024-10-21",
+        api_version="2024-02-15-preview",
         azure_deployment="gpt4o"
+    )
+
+# Helper to build dynamic system message
+
+def build_system_message(available_tool_names, user_system_message):
+    all_tool_list = ', '.join([f"{tool['name']} ({tool['url']})" for tool in ALL_TOOLS])
+    available_list = ', '.join([tool['name'] for tool in ALL_TOOLS if tool['name'] in available_tool_names])
+    # Compose the robust system message
+    return (
+        (user_system_message.strip() + "\n\n") +
+        f"You are a helpful AI agent. You were assigned the given tools: {all_tool_list}.\n"
+        f"Currently, the following tools are available: {available_list}.\n"
+        "If the user asks for a tool that is not available, inform them that the tool is down and might be under maintenance and list the available tools."
     )
 
 if __name__ == "__main__":

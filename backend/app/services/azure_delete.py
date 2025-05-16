@@ -115,7 +115,7 @@ if __name__ == "__main__":
     # Example usage
     repo = "Simant-Asawale-Coding/AgentsBuilder"  # Change as needed
     github_token = os.environ.get("GITHUB_TOKEN")
-    url_or_name = "https://agno1.politeisland-6a32.eastus.azurecontainerapps.io"
-    resource_group = "aressgenai"
-    subscription_id = os.environ.get("AZURE_SUBSCRIPTION_ID")
+    url_or_name = "https://heloworld.wonderfulhill-64c3fbea.eastus.azurecontainerapps.io"
+    resource_group = "AgentsBuilder-ResourceGroup"
+    subscription_id = os.environ.get("AZURE_SUBSCRIPTION_ID","9b3ab87b-de25-4143-acd1-450bc6810882")
     delete_container_app_via_github(repo, github_token, url_or_name, resource_group, subscription_id)

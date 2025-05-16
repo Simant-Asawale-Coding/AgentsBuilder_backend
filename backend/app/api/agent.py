@@ -49,7 +49,6 @@ def create_agent(agent_req: AgentCreateRequest):
         raise HTTPException(status_code=500, detail=f"Template rendering failed: {e}")
     # Save generated code
     agent_id = get_agent_id({
-        "user_id": agent_req.user_id,
         "status": "created",
         "endpoint": "",
         "tools": agent_req.tools,

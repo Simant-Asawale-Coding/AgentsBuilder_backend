@@ -4,7 +4,7 @@ tools = [
     {
         "name": "Tavily",
         "description": "Web search tool for retrieving up-to-date information from the internet.",
-        "url": "http://tavily.eastus.azurecontainer.io:8000/sse",
+        "url": "https://tavily34-10d85be072--abr4bs5.wonderfulhill-64c3fbea.eastus.azurecontainerapps.io/sse",
         "type": "web_search",
         "transport": "sse"
     },

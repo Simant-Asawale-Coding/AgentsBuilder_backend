@@ -16,8 +16,11 @@ load_dotenv()
 
 app = FastAPI()
 
+from typing import List, Optional
+
 class ChatRequest(BaseModel):
     input: str
+    chat_history: Optional[List[str]] = None  # List of previous messages (user/assistant turns)
 
 # --- MCP Tool Config ---
 ALL_TOOLS = [
@@ -108,19 +111,29 @@ async def get_current_agent():
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    available_tools = [mcp_tool_instances[tool["id"]] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool["id"]] and mcp_tool_instances[tool["id"]] is not None]
-    if not available_tools:
-        return {"output": "MCP Agent not available at the moment, it may be under maintenance. Please retry after some time."}
+    # Format chat history as a natural conversation transcript
+    chat_history = request.chat_history or []
+    conversation = []
+    for msg in chat_history:
+        msg_strip = msg.strip()
+        if msg_strip.lower().startswith("user:"):
+            conversation.append(f"User: {msg_strip[5:].strip()}")
+        elif msg_strip.lower().startswith("assistant:"):
+            conversation.append(f"Assistant: {msg_strip[10:].strip()}")
+        else:
+            conversation.append(msg_strip)
+    conversation.append(f"User: {request.input.strip()}")
+    final_query = "Conversation so far:\n" + "\n".join(conversation)
     try:
         agent = await get_current_agent()
         result = await Runner.run(
             starting_agent=agent,
-            input=request.input
+            input=final_query
         )
         return {"output": result.final_output}
     except Exception as e:
         logging.error(f"Error during agent run: {e}")
-        return {"output": "MCP Agent not available at the moment, it may be under maintenance. Please retry after some time."}
+        return {"output": "An error occurred while fetching the response. Please try again later and make sure the prompt follows safety guidelines."}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=80)

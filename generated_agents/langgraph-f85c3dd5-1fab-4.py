@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 from langchain_openai import AzureChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
@@ -6,19 +7,18 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
 import asyncio
-
 import logging
 logging.basicConfig(level=logging.INFO)
-
+load_dotenv()
 
 app = FastAPI()
 
 def get_azure_llm():
     return AzureChatOpenAI(
-        azure_endpoint="{{ llm_endpoint }}",
-        api_key="{{ llm_api_key }}",
-        api_version="{{ llm_api_version }}",
-        azure_deployment="{{ llm_model }}"
+        azure_endpoint="https://aressgenaisvc.openai.azure.com/",
+        api_key="09d5dfbba3474a18b2f65f8f9ca19bab",
+        api_version="2024-02-15-preview",
+        azure_deployment="gpt4o"
     )
 
 from typing import List, Optional
@@ -32,9 +32,11 @@ logging.basicConfig(level=logging.INFO)
 
 # --- MCP Tool Config ---
 ALL_TOOLS = [
-    {% for mcp in mcp_servers %}
-    {"name": "{{ mcp.name }}", "url": "{{ mcp.url }}", "transport": "{{ mcp.transport }}"},
-    {% endfor %}
+    
+    {"name": "Tavily", "url": "https://tavily34-10d85be072.wonderfulhill-64c3fbea.eastus.azurecontainerapps.io/sse", "transport": "sse"},
+    
+    {"name": "SOQL", "url": "http://mcpserver2.eastus.azurecontainer.io:8000/sse", "transport": "sse"},
+    
 ]
 MCP_TOOL_CONFIGS = ALL_TOOLS
 
@@ -64,10 +66,9 @@ async def background_health_checker():
 def build_system_message(available_tool_names, user_system_message):
     all_tool_list = ', '.join([f"{tool['name']} ({tool['url']})" for tool in ALL_TOOLS])
     available_list = ', '.join([tool['name'] for tool in ALL_TOOLS if tool['name'] in available_tool_names])
-    # Compose the robust system message
     return (
-        ("SYSTEM_MESSAGE_BY_CREATOR:" + user_system_message.strip() + "\n\n") +
-        f"DEVELOPER_NOTE:You are a helpful Dynamically created LangGraph MCP(Model Context Protocol) tools agent created through a portal - Vartik MCP Agents Studio. MCP allows users to connect to their tools in a secure and efficient manner.\nLangGraph is a specialized extension of LangChain, focused on building highly controllable and customizable agent workflows using a graph-based architecture. It enables developers to define agent logic as nodes and edges, making it easy to visualize, debug, and manage complex agent interactions and state transitions. LangGraph is ideal for scenarios where you need precise control over agent decision-making, branching logic, and multi-step tool orchestration. It is especially well-suited for advanced use cases like multi-agent systems, stateful workflows, and applications requiring fine-grained agent orchestration. By leveraging the strengths of both LangChain and graph-based design, LangGraph offers a powerful platform for building robust, maintainable, and scalable agent systems.\n\n----------------------------------------------------------------\n\n-U need to understand that u will be serving requests directly to the end user, so answer quetions accordingly.\n-Always keep your tone professional and appropriate, unless user specifically asks for a different tone that's not inappropriate.\n-Always keep ur answer very short, on point and concise, unless the SYSTEM_MESSAGE_BY_CREATOR or the user query mentions otherwise.\n-You were assigned the given tools: {all_tool_list}.\n"
+        (user_system_message.strip() + "\n\n") +
+        f"You are a helpful AI agent. You were assigned the given tools: {all_tool_list}.\n"
         f"Currently, the following tools are available: {available_list}.\n"
         "If the user asks for a tool that is not available, inform them that the tool is down and might be under maintenance and list the available tools."
     )
@@ -92,7 +93,7 @@ async def startup_event():
                 available_tool_names.append(name)
             except Exception as e:
                 logging.warning(f"Failed to get tools from {name}: {e}")
-    user_system_message = "{{ system_message }}"
+    user_system_message = "You are a helpful AI agent."
     system_message = build_system_message(available_tool_names, user_system_message)
     agent = create_react_agent(llm, available_tools, prompt=system_message)
 
@@ -126,7 +127,7 @@ async def chat(request: ChatRequest):
                     available_tool_names.append(name)
                 except Exception as e:
                     logging.warning(f"Failed to get tools from {name}: {e}")
-        user_system_message = "{{ system_message }}"
+        user_system_message = "You are a helpful AI agent."
         system_message = build_system_message(available_tool_names, user_system_message)
         agent = create_react_agent(get_azure_llm(), available_tools, prompt=system_message)
         result = await agent.ainvoke({"messages": final_query})
@@ -147,7 +148,7 @@ async def chat(request: ChatRequest):
         return {"output": content}
     except Exception as e:
         logging.error(f"Chat endpoint error: {e}")
-        raise HTTPException(status_code=500, detail="An error occurred while processing your request. Please try again later and make sure the prompt follows safety guidelines.")
+        raise HTTPException(status_code=500, detail="An error occurred while processing your request.")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=80)
