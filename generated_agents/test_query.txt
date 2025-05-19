@@ -1,0 +1,9 @@
+{
+  "input": "What was my first message to u",
+  "chat_history": [
+    "user: Hi, can you help me with cloud deployment options?",
+    "assistant: Absolutely! Are you interested in a specific cloud provider or technology?",
+    "user: I'm considering Azure for deploying scalable applications.",
+    "assistant: Great choice! Azure offers several options like Azure App Service, Azure Kubernetes Service, and Azure Container Apps. Would you like details on any of these?"
+  ]
+}
