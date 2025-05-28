@@ -1,0 +1,58 @@
+from python_a2a import A2AServer, run_server, skill, agent, AgentCard, AgentSkill, TaskStatus, TaskState
+import logging
+logging.basicConfig(level=logging.INFO)
+import asyncio
+
+@agent(
+    name="{{ agent_name }}",
+    description={% if agent_description is not none %}"{{ agent_description }}"{% else %}None{% endif %},
+    version={% if agent_version is not none %}"{{ agent_version }}"{% else %}None{% endif %},
+    url="https://{{ agent_id }}.wonderfulhill-64c3fbea.eastus.azurecontainerapps.io"
+)
+class OpenaiA2AAgent(A2AServer):
+    def __init__(self):
+        super().__init__()
+
+    @skill(
+        name="{{ skill_name }}",
+        description={% if skill_description is not none %}"{{ skill_description }}"{% else %}None{% endif %},
+        tags={% if skill_tags is not none %}{{ skill_tags }}{% else %}None{% endif %},
+        examples={% if skill_examples is not none %}{{ skill_examples }}{% else %}None{% endif %}
+    )
+    def openai_agent(self, message):
+        """Forward the message to the external agent at {{ agent_chat_url }} and return its response."""
+        import httpx
+        try:
+            resp = httpx.post("{{ agent_chat_url }}", json={"input": message}, timeout=60)
+            resp.raise_for_status()
+            result = resp.json()
+            return result.get("output", "No output from agent.")
+        except Exception as e:
+            logging.exception("Error contacting external agent:")
+            return f"Error: {str(e)}"
+        
+    async def handle_task_async(self, task):
+        message_data = task.message or {}
+        content = message_data.get("content", {})
+        text = content.get("text", "") if isinstance(content, dict) else ""
+
+        if text:
+            response = await asyncio.get_running_loop().run_in_executor(None, self.openai_agent, text)
+            task.artifacts = [{
+                "parts": [{"type": "text", "text": response}]
+            }]
+            task.status = TaskStatus(state=TaskState.COMPLETED) 
+        else:
+            task.status = TaskStatus(
+                state=TaskState.INPUT_REQUIRED,
+                message={"role": "agent", "content": {"type": "text", 
+                         "text": "Please provide a query for the agent."}}
+            )
+        return task
+
+    def handle_task(self, task):
+        return asyncio.run(self.handle_task_async(task))
+
+if __name__ == "__main__":
+    agent = OpenaiA2AAgent()
+    run_server(agent, port=8081)

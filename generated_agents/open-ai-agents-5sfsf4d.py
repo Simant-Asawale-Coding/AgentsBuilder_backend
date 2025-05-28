@@ -35,7 +35,7 @@ mcp_tool_instances = {tool["id"]: None for tool in MCP_TOOL_CONFIGS}
 
 async def check_tool_health(tool_id, url):
     old_tool = mcp_tool_instances.get(tool_id)
-    tool = MCPServerSse(params={"url": url}, cache_tools_list=True)
+    tool = MCPServerSse(params={"url": url}, cache_tools_list=True, client_session_timeout_seconds=10)
     try:
         await tool.connect()
         mcp_tool_status[tool_id] = True
@@ -77,13 +77,42 @@ async def startup_event():
     await asyncio.sleep(1)  # Give checker a moment to run on startup
 
 # Helper to build dynamic system message
+# def build_system_message(available_tool_ids):
+#     all_tool_list = ', '.join([f"{tool['id']} ({tool['desc']})" for tool in ALL_TOOLS])
+#     available_list = ', '.join([tool['id'] for tool in ALL_TOOLS if tool['id'] in available_tool_ids])
+#     return (
+#         f"You are a helpful AI agent. You have access to the following tools: {all_tool_list}.\n"
+#         f"Currently, the following tools are available: {available_list}.\n"
+#         "If the user asks for a tool that is not available, inform them that the tool is under maintenance and list the available tools."
+#     )
+
 def build_system_message(available_tool_ids):
     all_tool_list = ', '.join([f"{tool['id']} ({tool['desc']})" for tool in ALL_TOOLS])
     available_list = ', '.join([tool['id'] for tool in ALL_TOOLS if tool['id'] in available_tool_ids])
     return (
         f"You are a helpful AI agent. You have access to the following tools: {all_tool_list}.\n"
-        f"Currently, the following tools are available: {available_list}.\n"
-        "If the user asks for a tool that is not available, inform them that the tool is under maintenance and list the available tools."
+f"Currently, the following tools are available: {available_list}.\n"
+"If the user asks for a tool that is not available, inform them that the tool is under maintenance and list the available tools.\n Please always try to use your tool to find the answer of a question"
+"\n"
+"You are part of a dynamic multi-agent system using the Agent2Agent (A2A) protocol. In this environment, agents collaborate to solve complex queries by passing structured request and response cards between each other, coordinated by a client workflow. You may be called upon to answer a user query directly, or to contribute partial information and recommend another agent for further processing.\n"
+"\nIf u are asked a question in a normal format and not in a card format, then u are not part of a multi-agent system and u should answer the question directly by using ur available tools and without responding in a response card format.\n"
+"\n"
+"When you receive a task, it will be in the form of a REQUEST CARD with the following structure:\n"
+"-Original_User_Question: The user's original query.\n"
+"-Current_Answer_Context: A list of previous agents' answers and reasoning steps, e.g. [[1- agent_name, question asked, answer], ...]\n"
+"-Available_Agents: A list of available agents in the network, with their skills and descriptions.\n"
+"-Question_for_you: The specific question you are being asked to answer in this step.\n"
+"\n"
+"IMPORTANT: When responding, you MUST strictly follow this RESPONSE CARD format:\n\n------------------------------------------------------"
+"-$$ Current_Answer_Context: [[1- agent_name, question asked, answer], [2- agent_name, question_asked, answer],[3-your_name, question_asked_to_you, your answer]]\n"
+"-Answer_Context_Relevancy_Block: STRICTLY YES% / NO%\n"
+"- ##Question_for_other_Agent:\n"
+"**Agent_name:\n"
+"**Question_for_agent:\n\n"
+"----------------------------------------------------------------\n"
+"\n Whenever u recieve a question in the request card format, always first understand what tools u have available, then how much part of the question can u actually find the answer '100%' using the available tools."
+"\n If any part of the question can't be answered '100%' using the available tools, then u should check the avaible agents, analyse if they can answer the question, and then formulate the question to be sent to the next agent in the response card format. "
+"Only respond in this format. If the answer is final and complete, set Answer_Context_Relevancy_Block to 'YES%'. Otherwise, set it to 'NO%' and specify the next agent and question in the required format. Always use the information in the request card and the current environment to answer as accurately and helpfully as possible."
     )
 
 # Dynamically create the Agent with available tools
@@ -99,6 +128,7 @@ async def get_current_agent():
     available_tools = [mcp_tool_instances[tool['id']] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['id']] and mcp_tool_instances[tool['id']] is not None]
     available_tool_ids = [tool['id'] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['id']] and mcp_tool_instances[tool['id']] is not None]
     system_message = build_system_message(available_tool_ids)
+    print(system_message)
     return Agent(
         name="Assistant",
         instructions=system_message,
@@ -136,4 +166,4 @@ async def chat(request: ChatRequest):
         return {"output": "An error occurred while fetching the response. Please try again later and make sure the prompt follows safety guidelines."}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=80)
+    uvicorn.run(app, host="0.0.0.0", port=81)

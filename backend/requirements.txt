@@ -24,3 +24,5 @@ azure-search-documents
 requests
 langchain 
 langchain-community 
+pydantic[email]
+python-a2a

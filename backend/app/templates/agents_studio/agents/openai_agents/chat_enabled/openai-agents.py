@@ -1,4 +1,3 @@
-import os
 import asyncio
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -65,11 +64,16 @@ def fetch_chat_history(conversation_id: str) -> List[Dict[str, Any]]:
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 def insert_chat_message(data: Dict[str, Any]):
+    """
+    Robustly insert a chat message into the chat_history table, handling both auto-increment and non-auto-increment message_id schemas.
+    If message_id is required, automatically generates the next available id.
+    """
     import logging
     conn = get_connection()
     cursor = conn.cursor()
     table_name = AppSettings().agentsbuilder_chathistorytable
     try:
+        # Try insert without message_id (auto-increment case)
         cursor.execute(
             f"INSERT INTO {table_name} (conversation_id, user_id, agent_id, sender, message_text, created_at, attachments) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
@@ -80,10 +84,12 @@ def insert_chat_message(data: Dict[str, Any]):
         conn.commit()
         return cursor.lastrowid
     except Exception as e:
+        # Check if error is due to missing message_id
         if hasattr(e, 'args') and any('message_id' in str(arg) for arg in e.args):
             logging.warning("message_id required in insert; falling back to manual id generation.")
-            cursor.execute(f"SELECT ISNULL(MAX(message_id), 0) + 1 FROM {table_name}")
-            next_id = cursor.fetchone()[0]
+            # Use a UUID for message_id to guarantee uniqueness
+            import uuid
+            next_id = str(uuid.uuid4())
             cursor.execute(
                 f"INSERT INTO {table_name} (message_id, conversation_id, user_id, agent_id, sender, message_text, created_at, attachments) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (

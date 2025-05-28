@@ -1,16 +1,104 @@
 import os
-from dotenv import load_dotenv
 from agno.agent import Agent
 from agno.models.azure import AzureOpenAI
 from agno.tools.mcp import MCPTools
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
+import datetime
 import asyncio
 import logging
 logging.basicConfig(level=logging.INFO)
+from azure.appconfiguration import AzureAppConfigurationClient
+from pydantic_settings import BaseSettings
+import pyodbc
+from typing import List, Dict, Any
 
-load_dotenv()
+# Get Azure App Configuration connection string
+connection_string = "Endpoint=https://agents-builder-app-config.azconfig.io;Id=HTIL;Secret=CqSfSRB6toHJYmWozz0XAet8tqSFUyLPw66osOnxdQ5be9YDtiE6JQQJ99BEACYeBjFdkwbiAAACAZAC337W"
+
+# Initialize Azure App Configuration client
+client = AzureAppConfigurationClient.from_connection_string(connection_string)
+
+def get_config_value(key, label=None):
+    """Fetch configuration values from Azure App Configuration. Handles key formatting and labels."""
+    azure_key = key.replace("_", ":")  # Convert Python-style keys to Azure's format
+    try:
+        setting = client.get_configuration_setting(key=azure_key, label=label)
+        if setting is None or setting.value is None:
+            raise ValueError(f"Configuration key '{azure_key}' with label '{label}' not found in Azure App Configuration.")
+        return setting.value
+    except Exception as e:
+        raise ValueError(f"Error retrieving key '{azure_key}' with label '{label}': {str(e)}")
+
+class AppSettings(BaseSettings):
+    """Application settings for AgentsBuilder"""
+
+    # AgentsBuilder MSSQL settings
+    agentsbuilder_mssqlconnectionstring: str = get_config_value("agentsbuilder:dbconnectionstring", label="mssql")
+    agentsbuilder_chathistorytable: str = get_config_value("agentsbuilder:chathistorytable", label="mssql-table")
+
+CONN_STR = AppSettings().agentsbuilder_mssqlconnectionstring
+
+def get_connection():
+    return pyodbc.connect(CONN_STR,timeout=60)
+
+def fetch_chat_history(conversation_id: int) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    table_name = AppSettings().agentsbuilder_chathistorytable
+    try:
+        cursor.execute(
+            f"SELECT * FROM {table_name} WHERE conversation_id = ? AND (soft_delete = 0 OR soft_delete IS NULL) ORDER BY created_at",
+            (conversation_id,)
+        )
+    except Exception:
+        cursor.execute(
+            f"SELECT * FROM {table_name} WHERE conversation_id = ? ORDER BY created_at",
+            (conversation_id,)
+        )
+    columns = [column[0] for column in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+def insert_chat_message(data: Dict[str, Any]):
+    """
+    Robustly insert a chat message into the chat_history table, handling both auto-increment and non-auto-increment message_id schemas.
+    If message_id is required, automatically generates the next available id.
+    """
+    import logging
+    conn = get_connection()
+    cursor = conn.cursor()
+    table_name = AppSettings().agentsbuilder_chathistorytable
+    try:
+        # Try insert without message_id (auto-increment case)
+        cursor.execute(
+            f"INSERT INTO {table_name} (conversation_id, user_id, agent_id, sender, message_text, created_at, attachments) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                data['conversation_id'], data['user_id'], data['agent_id'], data['sender'],
+                data.get('message_text'), data.get('created_at'), data.get('attachments')
+            )
+        )
+        conn.commit()
+        return cursor.lastrowid
+    except Exception as e:
+        # Check if error is due to missing message_id
+        if hasattr(e, 'args') and any('message_id' in str(arg) for arg in e.args):
+            logging.warning("message_id required in insert; falling back to manual id generation.")
+            # Get next message_id
+            cursor.execute(f"SELECT ISNULL(MAX(message_id), 0) + 1 FROM {table_name}")
+            next_id = cursor.fetchone()[0]
+            cursor.execute(
+                f"INSERT INTO {table_name} (message_id, conversation_id, user_id, agent_id, sender, message_text, created_at, attachments) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    next_id, data['conversation_id'], data['user_id'], data['agent_id'], data['sender'],
+                    data.get('message_text'), data.get('created_at'), data.get('attachments')
+                )
+            )
+            conn.commit()
+            return next_id
+        else:
+            logging.error(f"Failed to insert chat message: {e}")
+            raise
 
 app = FastAPI()
 
@@ -18,7 +106,9 @@ from typing import List, Optional
 
 class ChatRequest(BaseModel):
     input: str
-    chat_history: Optional[List[str]] = None  # List of previous messages (user/assistant turns)
+    conversation_id: str
+    user_id: int  # Required for chat_history insert
+    agent_id: str  # Required for chat_history insert
 
 # --- MCP Tool Config ---
 ALL_TOOLS = [{"name": "Tavily", "transport": "sse", "url": "https://tavily34-10d85be072--abr4bs5.wonderfulhill-64c3fbea.eastus.azurecontainerapps.io/sse"}, {"name": "SOQL", "transport": "sse", "url": "http://mcpserver2.eastus.azurecontainer.io:8000/sse"}]
@@ -74,19 +164,30 @@ async def startup_event():
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    # Format chat history as a natural conversation transcript
-    chat_history = request.chat_history or []
-    conversation = []
-    for msg in chat_history:
-        msg_strip = msg.strip()
-        if msg_strip.lower().startswith("user:"):
-            conversation.append(f"User: {msg_strip[5:].strip()}")
-        elif msg_strip.lower().startswith("assistant:"):
-            conversation.append(f"Assistant: {msg_strip[10:].strip()}")
+    
+
+    # Fetch chat history from DB
+    chat_history = fetch_chat_history(request.conversation_id)
+
+    # Remove the last message (if any)
+    if chat_history:
+        chat_history_for_prompt = chat_history[:-1]
+    else:
+        chat_history_for_prompt = []
+
+    # Format chat history for prompt
+    history_lines = []
+    for msg in chat_history_for_prompt:
+        sender = msg.get('sender', 'user')
+        text = msg.get('message_text', '')
+        if sender.lower() == 'user':
+            history_lines.append(f"User: {text}")
         else:
-            conversation.append(msg_strip)
-    conversation.append(f"User: {request.input.strip()}")
-    final_query = "Conversation so far:\n" + "\n".join(conversation)
+            history_lines.append(f"Assistant: {text}")
+
+    # Build the final query prompt
+    final_query = f"current_user_query: {request.input}\n\nchat_history: {'\n'.join(history_lines)}"
+
     try:
         global agent
         # Always re-instantiate agent with up-to-date tools and system message
@@ -97,6 +198,16 @@ async def chat(request: ChatRequest):
         agent = Agent(model=get_azure_llm(), tools=available_tools, system_message=system_message)
         result = await agent.arun(final_query)
         output = result.content
+        # Insert agent's answer into chat_history
+        insert_chat_message({
+            'conversation_id': request.conversation_id,
+            'user_id': request.user_id,
+            'agent_id': request.agent_id,
+            'sender': 'agent',
+            'message_text': output,
+            'created_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'attachments': None
+        })
         return {"output": output}
     except Exception as e:
         logging.error(f"Error during agent run: {e}")
@@ -108,7 +219,9 @@ def get_azure_llm():
         api_key="09d5dfbba3474a18b2f65f8f9ca19bab",
         azure_endpoint="https://aressgenaisvc.openai.azure.com/",
         api_version="2024-02-15-preview",
-        azure_deployment="gpt4o"
+        azure_deployment="gpt4o",
+        max_tokens=1000,
+        temperature=0.7
     )
 
 # Helper to build dynamic system message

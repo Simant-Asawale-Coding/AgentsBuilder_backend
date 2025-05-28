@@ -1,16 +1,30 @@
 import os
-import asyncio
+from dotenv import load_dotenv
+from langchain_openai import AzureChatOpenAI
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from agents import Agent, Runner, set_default_openai_client, set_tracing_disabled
-from openai import AsyncAzureOpenAI
-from agents.models import openai_chatcompletions
-from agents.mcp import MCPServerSse 
 import uvicorn
+import asyncio
 import logging
+
 logging.basicConfig(level=logging.INFO)
 
+load_dotenv()
+
 app = FastAPI()
+
+def get_azure_llm():
+    return AzureChatOpenAI(
+        azure_endpoint="https://aressgenaisvc.openai.azure.com/",
+        api_key="09d5dfbba3474a18b2f65f8f9ca19bab",
+        api_version="2024-10-21",
+        azure_deployment="gpt4o",
+        temperature=0.7,
+        max_tokens=3000,
+        top_p=0.9,
+    )
 
 from typing import List, Optional, Dict, Any
 from azure.appconfiguration import AzureAppConfigurationClient
@@ -65,11 +79,16 @@ def fetch_chat_history(conversation_id: str) -> List[Dict[str, Any]]:
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 def insert_chat_message(data: Dict[str, Any]):
+    """
+    Robustly insert a chat message into the chat_history table, handling both auto-increment and non-auto-increment message_id schemas.
+    If message_id is required, automatically generates the next available id.
+    """
     import logging
     conn = get_connection()
     cursor = conn.cursor()
     table_name = AppSettings().agentsbuilder_chathistorytable
     try:
+        # Try insert without message_id (auto-increment case)
         cursor.execute(
             f"INSERT INTO {table_name} (conversation_id, user_id, agent_id, sender, message_text, created_at, attachments) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
@@ -80,10 +99,12 @@ def insert_chat_message(data: Dict[str, Any]):
         conn.commit()
         return cursor.lastrowid
     except Exception as e:
+        # Check if error is due to missing message_id
         if hasattr(e, 'args') and any('message_id' in str(arg) for arg in e.args):
             logging.warning("message_id required in insert; falling back to manual id generation.")
-            cursor.execute(f"SELECT ISNULL(MAX(message_id), 0) + 1 FROM {table_name}")
-            next_id = cursor.fetchone()[0]
+            # Use a UUID for message_id to guarantee uniqueness
+            import uuid
+            next_id = str(uuid.uuid4())
             cursor.execute(
                 f"INSERT INTO {table_name} (message_id, conversation_id, user_id, agent_id, sender, message_text, created_at, attachments) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -99,28 +120,26 @@ def insert_chat_message(data: Dict[str, Any]):
 
 # --- MCP Tool Config ---
 ALL_TOOLS = [
-    
-    {"id": "Tavily", "desc": "Tavily", "url": "https://tavily34-10d85be072.wonderfulhill-64c3fbea.eastus.azurecontainerapps.io/sse"},
-    
-    {"id": "SOQL", "desc": "SOQL", "url": "http://mcpserver2.eastus.azurecontainer.io:8000/sse"},
-    
+    {"id": "tavily", "desc": "Tavily Search Tool", "url": "https://tavily34-10d85be072--abr4bs5.wonderfulhill-64c3fbea.eastus.azurecontainerapps.io/sse"},
+    {"id": "mcpserver2", "desc": "MCPServer2 Data Tool", "url": "http://mcpserver2.eastus.azurecontainer.io:8000/sse"},
 ]
 MCP_TOOL_CONFIGS = ALL_TOOLS
 
+# Track tool health and instances
 mcp_tool_status = {tool["id"]: False for tool in MCP_TOOL_CONFIGS}
-mcp_tool_instances = {tool["id"]: None for tool in MCP_TOOL_CONFIGS}
+mcp_tool_clients = {tool["id"]: None for tool in MCP_TOOL_CONFIGS}
 
 async def check_tool_health(tool_id, url):
-    old_tool = mcp_tool_instances.get(tool_id)
-    tool = MCPServerSse(params={"url": url}, cache_tools_list=True)
+    old_client = mcp_tool_clients.get(tool_id)
+    client = MultiServerMCPClient({tool_id: {"url": url, "transport": "sse"}})
     try:
-        await tool.connect()
+        await client.__aenter__()
         mcp_tool_status[tool_id] = True
-        mcp_tool_instances[tool_id] = tool
+        mcp_tool_clients[tool_id] = client
         logging.info(f"Tool {tool_id} is available.")
-        if old_tool and old_tool is not tool:
+        if old_client and old_client is not client:
             try:
-                await old_tool.disconnect()
+                await old_client.__aexit__(None, None, None)
             except Exception as cleanup_err:
                 if "cancel scope" in str(cleanup_err):
                     logging.info(f"Suppressing known async cleanup error for tool {tool_id}")
@@ -128,15 +147,15 @@ async def check_tool_health(tool_id, url):
                     logging.warning(f"Error closing old tool {tool_id}: {cleanup_err}")
     except Exception as e:
         mcp_tool_status[tool_id] = False
-        if old_tool:
+        if old_client:
             try:
-                await old_tool.disconnect()
+                await old_client.__aexit__(None, None, None)
             except Exception as cleanup_err:
                 if "cancel scope" in str(cleanup_err):
                     logging.info(f"Suppressing known async cleanup error for tool {tool_id}")
                 else:
                     logging.warning(f"Error closing tool {tool_id}: {cleanup_err}")
-        mcp_tool_instances[tool_id] = None
+        mcp_tool_clients[tool_id] = None
         logging.warning(f"Tool {tool_id} unavailable: {e}")
 
 async def background_health_checker():
@@ -153,7 +172,8 @@ async def startup_event():
     asyncio.create_task(background_health_checker())
     await asyncio.sleep(1)  # Give checker a moment to run on startup
 
-def build_system_message(available_tool_ids):
+# Helper to build dynamic system prompt
+def build_system_prompt(available_tool_ids):
     all_tool_list = ', '.join([f"{tool['id']} ({tool['desc']})" for tool in ALL_TOOLS])
     available_list = ', '.join([tool['id'] for tool in ALL_TOOLS if tool['id'] in available_tool_ids])
     return (
@@ -162,27 +182,20 @@ def build_system_message(available_tool_ids):
         "If the user asks for a tool that is not available, inform them that the tool is under maintenance and list the available tools."
     )
 
+# Dynamically create the Agent with available tools
 async def get_current_agent():
-    openai_client = AsyncAzureOpenAI(
-        api_key="09d5dfbba3474a18b2f65f8f9ca19bab",
-        api_version="2024-02-15-preview",
-        azure_endpoint="https://aressgenaisvc.openai.azure.com/",
-        azure_deployment="gpt4o"
-    )
-    set_default_openai_client(openai_client)
-    set_tracing_disabled(True)
-    available_tools = [mcp_tool_instances[tool['id']] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['id']] and mcp_tool_instances[tool['id']] is not None]
-    available_tool_ids = [tool['id'] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['id']] and mcp_tool_instances[tool['id']] is not None]
-    system_message = build_system_message(available_tool_ids)
-    return Agent(
-        name="agent_openai_agents_75b03a9c",
-        instructions=system_message,
-        model=openai_chatcompletions.OpenAIChatCompletionsModel(
-            model="gpt4o",
-            openai_client=openai_client,
-        ),
-        mcp_servers=available_tools,
-    )
+    llm = get_azure_llm()
+    available_clients = [mcp_tool_clients[tool['id']] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['id']] and mcp_tool_clients[tool['id']] is not None]
+    available_tool_ids = [tool['id'] for tool in MCP_TOOL_CONFIGS if mcp_tool_status[tool['id']] and mcp_tool_clients[tool['id']] is not None]
+    # Collect all tools from all available clients
+    mcp_tools = []
+    for client in available_clients:
+        try:
+            mcp_tools.extend(client.get_tools())
+        except Exception as e:
+            logging.warning(f"Could not get tools from client: {e}")
+    system_prompt = build_system_prompt(available_tool_ids)
+    return create_react_agent(llm, mcp_tools, prompt=system_prompt)
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
@@ -207,30 +220,36 @@ async def chat(request: ChatRequest):
 
     # Build the final query prompt
     final_query = f"current_user_query: {request.input}\n\nchat_history: {'\n'.join(history_lines)}"
+
     try:
         agent = await get_current_agent()
-        result = await Runner.run(
-            starting_agent=agent,
-            input=final_query
-        )
+        result = await agent.ainvoke({"messages": final_query})
+        # Always extract the content from the last message (the model's response)
+        content = ""
+        if isinstance(result, dict) and "messages" in result and result["messages"]:
+            last_msg = result["messages"][-1]
+            if hasattr(last_msg, "content"):
+                content = last_msg.content
+            elif isinstance(last_msg, dict):
+                content = last_msg.get("content", "")
+            else:
+                content = str(last_msg)
+        else:
+            content = str(result)
         # Insert agent's answer into chat_history
         insert_chat_message({
             'conversation_id': request.conversation_id,
             'user_id': request.user_id,
             'agent_id': request.agent_id,
             'sender': 'agent',
-            'message_text': result.final_output,
+            'message_text': content,
             'created_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'attachments': None
         })
-        return {"output": result.final_output}
+        return {"output": content}
     except Exception as e:
         logging.error(f"Error during agent run: {e}")
         return {"output": "An error occurred while fetching the response. Please try again later and make sure the prompt follows safety guidelines."}
 
 if __name__ == "__main__":
-    try:
-        uvicorn.run(app, host="0.0.0.0", port=80)
-    except (RuntimeError, asyncio.CancelledError) as e:
-        if "Attempted to exit cancel scope" in str(e) or isinstance(e, asyncio.CancelledError):
-            pass
+    uvicorn.run(app, host="0.0.0.0", port=80)
